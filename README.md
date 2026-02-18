@@ -13,8 +13,8 @@ SlopSieve is intentionally **not an AI reviewer**. It's a conservative heuristic
 ## Run
 
 ```bash
-PORT=3026 node server.js
-# open http://localhost:3026
+PORT=3028 node server.js
+# open http://localhost:3028
 ```
 
 Optional (recommended):

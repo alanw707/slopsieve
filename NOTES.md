@@ -1,6 +1,6 @@
 ## Quick start
 
-- `PORT=3026 node server.js`
+- `PORT=3028 node server.js`
 - Analyze a PR like `owner/repo #123`.
 
 ## Architecture

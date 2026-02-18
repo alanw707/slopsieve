@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { URL } from 'node:url';
 
-const PORT = Number(process.env.PORT || 3026);
+const PORT = Number(process.env.PORT || 3028);
 
 function htmlEscape(s = '') {
   return String(s)
