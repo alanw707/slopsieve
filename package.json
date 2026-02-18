@@ -1,0 +1,12 @@
+{
+  "name": "slopsieve",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "PR triage dashboard to spot AI-slop risk patterns (dependency hallucinations, missing tests, secrets, oversized diffs) without using paid APIs.",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "cli": "node cli.js"
+  }
+}
