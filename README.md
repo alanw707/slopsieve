@@ -30,13 +30,29 @@ node cli.js owner/repo 123 --token=YOUR_TOKEN
 ```
 
 ## What it checks (today)
+### PR Triage Mode
 - PR size (files + lines changed)
 - Test change ratio (are tests moving with code?)
 - Basic secret patterns in patches (heuristic)
 - AI signature in PR body / commit messages (heuristic)
 - Dependency file changes + registry existence checks (npm + PyPI)
 
+### Deploy Gate Mode (new)
+- Flags deploy blockers (test bypass, branch-protection bypass, risky broad commands, secret leakage)
+- Adds rollout warnings (missing rollback, canary/staged rollout, migration safety, observability)
+- Returns decision: `ALLOW`, `REVIEW`, or `BLOCK`
+- Generates copy/paste markdown release checklist
+
+API endpoint:
+```bash
+curl -s -X POST http://localhost:3028/api/deploy-gate \
+  -d 'service=payments-api' \
+  -d 'environment=production' \
+  --data-urlencode 'plan=Deploy commit abc123 via GitHub Actions. Canary 10% for 15m, rollback via workflow_dispatch rollback.yml. Monitor error rate and p95 latency.'
+```
+
 ## Roadmap (easy upgrades)
 - Add GitHub webhook mode for auto-commenting (maintainer-controlled)
 - Add language-specific lint/test runners (optional Docker)
 - Add "review queue" sorting by risk score
+- Deploy Gate policy profiles (strict/standard/dev)

@@ -149,6 +149,30 @@ function landing({ error = '' } = {}) {
         </div>
       </div>
 
+      <div class="card" style="margin-top:16px">
+        <h2 style="margin:0 0 10px">Deploy Gate mode (NEW)</h2>
+        <p class="muted small">Pre-deploy guardrails for AI-assisted code. Paste your deployment plan and SlopSieve returns <b>ALLOW / REVIEW / BLOCK</b> with reasons and a release checklist.</p>
+        <form method="POST" action="/deploy-gate">
+          <div class="row">
+            <div>
+              <label>Service / app name</label>
+              <input name="service" placeholder="payments-api" required />
+            </div>
+            <div>
+              <label>Environment</label>
+              <select name="environment">
+                <option>production</option>
+                <option>staging</option>
+                <option>development</option>
+              </select>
+            </div>
+          </div>
+          <label>Deployment plan / notes</label>
+          <textarea name="plan" placeholder="Paste CI output, deploy command, migration notes, rollback plan, and test evidence..." required></textarea>
+          <div style="margin-top:12px"><button type="submit">Run Deploy Gate</button></div>
+        </form>
+      </div>
+
       <div class="footer">No data is stored server-side. Token is only used for GitHub API calls during the request.</div>
     </div>
   </body></html>`;
@@ -493,6 +517,76 @@ function renderReport({ findings, markdown }) {
     </div></body></html>`;
 }
 
+function deployGateAnalyze({ service, environment, plan }) {
+  const blob = `${service}\n${environment}\n${plan || ''}`.toLowerCase();
+  const blockers = [];
+  const warnings = [];
+  const positives = [];
+
+  const has = (re) => re.test(blob);
+
+  if (has(/skip[ -]?tests|--no-verify|ci[ -]?skip|skip ci/)) blockers.push('Deployment notes indicate tests/verification are being skipped.');
+  if (has(/force[ -]?push|push --force|branch protection disabled|bypass required checks/)) blockers.push('Plan bypasses branch protections or required checks.');
+  if (has(/terraform apply .*auto-approve|kubectl apply -f \.|chmod 777/)) blockers.push('High-risk deploy command pattern detected (broad or unsafe execution).');
+  if (has(/prod|production/) && has(/manual hotfix|direct to main|deploy from local/)) blockers.push('Production deploy appears to bypass controlled release path.');
+  if (has(/api[_-]?key\s*[:=]|secret\s*[:=]|token\s*[:=]|-----begin .*private key-----/)) blockers.push('Potential secret exposure in deployment notes.');
+
+  if (!has(/rollback|roll back|revert/)) warnings.push('No rollback plan detected.');
+  else positives.push('Rollback language detected.');
+
+  if (!has(/canary|blue.?green|staged rollout|gradual rollout/)) warnings.push('No staged rollout/canary strategy detected.');
+  else positives.push('Staged rollout strategy detected.');
+
+  if (has(/migration|schema|ddl/) && !has(/backward compatible|expand.?contract|dual write|feature flag/)) {
+    warnings.push('DB migration mentioned without backward-compatibility guardrails.');
+  }
+
+  if (!has(/monitor|alert|slo|dashboard|error budget|health check/)) warnings.push('Post-deploy monitoring/health checks not explicit.');
+  else positives.push('Monitoring/health checks mentioned.');
+
+  const score = Math.max(0, Math.min(100, blockers.length * 34 + warnings.length * 10 - positives.length * 4));
+  const gate = blockers.length ? 'BLOCK' : (warnings.length >= 3 ? 'REVIEW' : 'ALLOW');
+
+  const checklist = [
+    '# SlopSieve Deploy Gate checklist',
+    '',
+    `**Decision:** ${gate} (${score}/100 risk)`,
+    '',
+    '## Required before production',
+    '- [ ] CI green on target commit',
+    '- [ ] Rollback command documented and tested in staging',
+    '- [ ] Deployment uses staged rollout (canary/blue-green) when user-impacting',
+    '- [ ] Observability checks defined (errors, latency, saturation)',
+    '- [ ] DB migrations are backward compatible',
+    '- [ ] No secrets in logs, PRs, or deployment notes',
+    '',
+    '## Context',
+    `- Service: ${service}`,
+    `- Environment: ${environment}`
+  ].join('\n');
+
+  return { service, environment, gate, score, blockers, warnings, positives, checklist };
+}
+
+function renderDeployGateReport(result) {
+  const cls = result.gate === 'BLOCK' ? 'bad' : (result.gate === 'REVIEW' ? 'warn' : 'ok');
+  return `<!doctype html><html><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>SlopSieve Deploy Gate — ${htmlEscape(result.service)}</title>${baseStyles()}</head>
+    <body><div class="wrap"><div class="card">
+      <div class="row" style="align-items:center">
+        <div><h1 style="margin:0">Deploy Gate: ${htmlEscape(result.service)}</h1><div class="muted small">Environment: ${htmlEscape(result.environment)}</div></div>
+        <div style="text-align:right"><a href="/" class="pill">← Back</a></div>
+      </div>
+      <div style="margin-top:10px" class="kpi"><span class="pill ${cls}">${result.gate} · ${result.score}/100</span></div>
+      <div class="hr"></div>
+      <div class="row">
+        <div class="card" style="flex:1"><b>Blockers</b><pre>${htmlEscape(JSON.stringify(result.blockers, null, 2))}</pre></div>
+        <div class="card" style="flex:1"><b>Warnings</b><pre>${htmlEscape(JSON.stringify(result.warnings, null, 2))}</pre></div>
+      </div>
+      <div class="card" style="margin-top:14px"><b>Checklist (Markdown)</b><pre>${htmlEscape(result.checklist)}</pre></div>
+    </div></div></body></html>`;
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
@@ -528,6 +622,19 @@ const server = http.createServer(async (req, res) => {
       const prs = await ghFetch(`https://api.github.com/repos/${owner}/${name}/pulls?state=open&per_page=30`, token);
       if (url.pathname === '/api/list') return json(res, 200, { repo, prs });
       return page(res, 200, renderList({ repo, prs, token }));
+    }
+
+    if (req.method === 'POST' && (url.pathname === '/deploy-gate' || url.pathname === '/api/deploy-gate')) {
+      const raw = await readBody(req);
+      const params = new URLSearchParams(raw);
+      const service = (params.get('service') || '').trim();
+      const environment = (params.get('environment') || 'production').trim();
+      const plan = (params.get('plan') || '').trim();
+      if (!service) throw new Error('Service is required');
+      if (!plan) throw new Error('Deployment plan is required');
+      const result = deployGateAnalyze({ service, environment, plan });
+      if (url.pathname === '/api/deploy-gate') return json(res, 200, result);
+      return page(res, 200, renderDeployGateReport(result));
     }
 
     if (req.method === 'GET' && url.pathname === '/robots.txt') {
