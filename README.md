@@ -2,6 +2,40 @@
 
 PR triage dashboard to spot AI-slop risk patterns (dependency hallucinations, missing tests, leaked secrets, oversized diffs) and generate a human verification checklist.
 
+## CI Integration
+
+Add SlopSieve to any repo in 30 seconds.
+
+```yaml
+name: SlopSieve PR Review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+jobs:
+  slopsieve:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: alanw707/slopsieve@main
+        with:
+          fail_on_high: 'true'
+          policy: 'standard'
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+**Inputs**
+
+| Input | Description | Default |
+| --- | --- | --- |
+| `fail_on_high` | Fail the CI check if risk is HIGH | `true` |
+| `policy` | Policy profile: strict, standard, or dev | `standard` |
+| `github_token` | GitHub token for API access | `${{ github.token }}` |
+
+Note: works on public repos without a token, private repos need `GITHUB_TOKEN` with `pull-requests: write`.
+
 ## Why
 Maintainers are getting flooded with low-quality AI-assisted PRs. The bottleneck isn't writing code anymore — it's **review bandwidth**.
 

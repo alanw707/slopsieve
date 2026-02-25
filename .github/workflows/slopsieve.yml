@@ -1,0 +1,17 @@
+name: SlopSieve PR Review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+jobs:
+  slopsieve:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: alanw707/slopsieve@main
+        with:
+          fail_on_high: 'true'
+          policy: 'standard'
+          github_token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,19 @@
+name: 'SlopSieve PR Review'
+description: 'AI-slop risk analysis for pull requests — flags hallucinated deps, missing tests, secrets, and oversized diffs'
+author: 'alanw707'
+inputs:
+  fail_on_high:
+    description: 'Fail the CI check if risk is HIGH'
+    required: false
+    default: 'true'
+  policy:
+    description: 'Policy profile: strict, standard, or dev'
+    required: false
+    default: 'standard'
+  github_token:
+    description: 'GitHub token for API access'
+    required: true
+    default: '${{ github.token }}'
+runs:
+  using: 'node22'
+  main: 'action.js'
