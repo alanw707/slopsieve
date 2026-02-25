@@ -40,6 +40,7 @@ node cli.js owner/repo 123 --token=YOUR_TOKEN
 ### Deploy Gate Mode (new)
 - Flags deploy blockers (test bypass, branch-protection bypass, risky broad commands, secret leakage)
 - Adds rollout warnings (missing rollback, canary/staged rollout, migration safety, observability)
+- Supports policy profiles: `strict`, `standard`, `dev`
 - Returns decision: `ALLOW`, `REVIEW`, or `BLOCK`
 - Generates copy/paste markdown release checklist
 
@@ -48,6 +49,7 @@ API endpoint:
 curl -s -X POST http://localhost:3028/api/deploy-gate \
   -d 'service=payments-api' \
   -d 'environment=production' \
+  -d 'policy=strict' \
   --data-urlencode 'plan=Deploy commit abc123 via GitHub Actions. Canary 10% for 15m, rollback via workflow_dispatch rollback.yml. Monitor error rate and p95 latency.'
 ```
 

@@ -166,6 +166,14 @@ function landing({ error = '' } = {}) {
                 <option>development</option>
               </select>
             </div>
+            <div>
+              <label>Policy profile</label>
+              <select name="policy">
+                <option value="standard" selected>standard</option>
+                <option value="strict">strict</option>
+                <option value="dev">dev</option>
+              </select>
+            </div>
           </div>
           <label>Deployment plan / notes</label>
           <textarea name="plan" placeholder="Paste CI output, deploy command, migration notes, rollback plan, and test evidence..." required></textarea>
@@ -517,18 +525,20 @@ function renderReport({ findings, markdown }) {
     </div></body></html>`;
 }
 
-function deployGateAnalyze({ service, environment, plan }) {
+function deployGateAnalyze({ service, environment, policy = 'standard', plan }) {
+  const normalizedPolicy = ['strict', 'standard', 'dev'].includes(policy) ? policy : 'standard';
   const blob = `${service}\n${environment}\n${plan || ''}`.toLowerCase();
   const blockers = [];
   const warnings = [];
   const positives = [];
 
   const has = (re) => re.test(blob);
+  const prodLike = /prod|production/.test(environment.toLowerCase());
 
   if (has(/skip[ -]?tests|--no-verify|ci[ -]?skip|skip ci/)) blockers.push('Deployment notes indicate tests/verification are being skipped.');
   if (has(/force[ -]?push|push --force|branch protection disabled|bypass required checks/)) blockers.push('Plan bypasses branch protections or required checks.');
   if (has(/terraform apply .*auto-approve|kubectl apply -f \.|chmod 777/)) blockers.push('High-risk deploy command pattern detected (broad or unsafe execution).');
-  if (has(/prod|production/) && has(/manual hotfix|direct to main|deploy from local/)) blockers.push('Production deploy appears to bypass controlled release path.');
+  if (prodLike && has(/manual hotfix|direct to main|deploy from local/)) blockers.push('Production deploy appears to bypass controlled release path.');
   if (has(/api[_-]?key\s*[:=]|secret\s*[:=]|token\s*[:=]|-----begin .*private key-----/)) blockers.push('Potential secret exposure in deployment notes.');
 
   if (!has(/rollback|roll back|revert/)) warnings.push('No rollback plan detected.');
@@ -544,8 +554,29 @@ function deployGateAnalyze({ service, environment, plan }) {
   if (!has(/monitor|alert|slo|dashboard|error budget|health check/)) warnings.push('Post-deploy monitoring/health checks not explicit.');
   else positives.push('Monitoring/health checks mentioned.');
 
+  if (normalizedPolicy === 'strict') {
+    if (!has(/runbook|approval|change request|peer review/)) warnings.push('Strict policy requires explicit human approval/runbook references.');
+    if (prodLike && !has(/canary|blue.?green|staged rollout|gradual rollout/)) {
+      blockers.push('Strict policy blocks production deploys without staged rollout language.');
+    }
+  }
+
+  if (normalizedPolicy === 'dev') {
+    // Dev policy still blocks dangerous patterns, but softens rollout/monitoring requirements.
+    const relaxed = new Set([
+      'No staged rollout/canary strategy detected.',
+      'Post-deploy monitoring/health checks not explicit.'
+    ]);
+    const keptWarnings = warnings.filter((w) => !relaxed.has(w));
+    const removed = warnings.length - keptWarnings.length;
+    warnings.length = 0;
+    warnings.push(...keptWarnings);
+    if (removed > 0) positives.push('Dev policy relaxed rollout/observability warnings.');
+  }
+
   const score = Math.max(0, Math.min(100, blockers.length * 34 + warnings.length * 10 - positives.length * 4));
-  const gate = blockers.length ? 'BLOCK' : (warnings.length >= 3 ? 'REVIEW' : 'ALLOW');
+  const reviewThreshold = normalizedPolicy === 'strict' ? 2 : 3;
+  const gate = blockers.length ? 'BLOCK' : (warnings.length >= reviewThreshold ? 'REVIEW' : 'ALLOW');
 
   const checklist = [
     '# SlopSieve Deploy Gate checklist',
@@ -562,10 +593,11 @@ function deployGateAnalyze({ service, environment, plan }) {
     '',
     '## Context',
     `- Service: ${service}`,
-    `- Environment: ${environment}`
+    `- Environment: ${environment}`,
+    `- Policy: ${normalizedPolicy}`
   ].join('\n');
 
-  return { service, environment, gate, score, blockers, warnings, positives, checklist };
+  return { service, environment, policy: normalizedPolicy, gate, score, blockers, warnings, positives, checklist };
 }
 
 function renderDeployGateReport(result) {
@@ -574,7 +606,7 @@ function renderDeployGateReport(result) {
     <title>SlopSieve Deploy Gate — ${htmlEscape(result.service)}</title>${baseStyles()}</head>
     <body><div class="wrap"><div class="card">
       <div class="row" style="align-items:center">
-        <div><h1 style="margin:0">Deploy Gate: ${htmlEscape(result.service)}</h1><div class="muted small">Environment: ${htmlEscape(result.environment)}</div></div>
+        <div><h1 style="margin:0">Deploy Gate: ${htmlEscape(result.service)}</h1><div class="muted small">Environment: ${htmlEscape(result.environment)} · Policy: ${htmlEscape(result.policy || 'standard')}</div></div>
         <div style="text-align:right"><a href="/" class="pill">← Back</a></div>
       </div>
       <div style="margin-top:10px" class="kpi"><span class="pill ${cls}">${result.gate} · ${result.score}/100</span></div>
@@ -582,6 +614,7 @@ function renderDeployGateReport(result) {
       <div class="row">
         <div class="card" style="flex:1"><b>Blockers</b><pre>${htmlEscape(JSON.stringify(result.blockers, null, 2))}</pre></div>
         <div class="card" style="flex:1"><b>Warnings</b><pre>${htmlEscape(JSON.stringify(result.warnings, null, 2))}</pre></div>
+        <div class="card" style="flex:1"><b>Positives</b><pre>${htmlEscape(JSON.stringify(result.positives, null, 2))}</pre></div>
       </div>
       <div class="card" style="margin-top:14px"><b>Checklist (Markdown)</b><pre>${htmlEscape(result.checklist)}</pre></div>
     </div></div></body></html>`;
@@ -629,10 +662,11 @@ const server = http.createServer(async (req, res) => {
       const params = new URLSearchParams(raw);
       const service = (params.get('service') || '').trim();
       const environment = (params.get('environment') || 'production').trim();
+      const policy = (params.get('policy') || 'standard').trim().toLowerCase();
       const plan = (params.get('plan') || '').trim();
       if (!service) throw new Error('Service is required');
       if (!plan) throw new Error('Deployment plan is required');
-      const result = deployGateAnalyze({ service, environment, plan });
+      const result = deployGateAnalyze({ service, environment, policy, plan });
       if (url.pathname === '/api/deploy-gate') return json(res, 200, result);
       return page(res, 200, renderDeployGateReport(result));
     }
