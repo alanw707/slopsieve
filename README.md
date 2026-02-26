@@ -6,6 +6,8 @@ PR triage dashboard to spot AI-slop risk patterns (dependency hallucinations, mi
 
 Add SlopSieve to any repo in 30 seconds.
 
+When a PR modifies `.github/workflows/*.yml` or `.yaml`, the action now auto-runs **Cost Gate** on those workflow files and appends CI cost findings to the PR comment.
+
 ```yaml
 name: SlopSieve PR Review
 on:
@@ -87,8 +89,19 @@ curl -s -X POST http://localhost:3028/api/deploy-gate \
   --data-urlencode 'plan=Deploy commit abc123 via GitHub Actions. Canary 10% for 15m, rollback via workflow_dispatch rollback.yml. Monitor error rate and p95 latency.'
 ```
 
+## Cost Gate Mode (new)
+- Paste GitHub Actions workflow YAML or CI logs
+- Detects duplicate jobs, oversized runners, missing cache, flaky retries, broad matrix, long sequential jobs, missing `timeout-minutes`, and Docker cache misses
+- Outputs estimated monthly waste (runner-minutes), recommendations, and an optimized YAML diff
+
+API endpoint:
+```bash
+curl -s -X POST http://localhost:3028/api/cost-gate \
+  --data-urlencode 'workflow=name: CI\non: [pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - run: npm test'
+```
+
 ## Roadmap (easy upgrades)
 - Add GitHub webhook mode for auto-commenting (maintainer-controlled)
 - Add language-specific lint/test runners (optional Docker)
 - Add "review queue" sorting by risk score
-- Deploy Gate policy profiles (strict/standard/dev)
+- Cost Gate rule tuning with repo history baselines

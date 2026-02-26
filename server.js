@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { URL } from 'node:url';
 import { analyzePR, ghFetch } from './lib/analyze.js';
+import { analyzeWorkflowCost } from './lib/cost-gate.js';
 
 const PORT = Number(process.env.PORT || 3028);
 
@@ -182,6 +183,22 @@ function landing({ error = '' } = {}) {
         </form>
       </div>
 
+      <div class="card" style="margin-top:16px">
+        <h2 style="margin:0 0 10px">Cost Gate (NEW)</h2>
+        <p class="muted small">Paste a GitHub Actions workflow YAML (or CI logs). SlopSieve estimates monthly CI waste, flags cost anti-patterns, and suggests an optimized YAML diff.</p>
+        <form method="POST" action="/cost-gate">
+          <label>Workflow YAML / CI log</label>
+          <textarea name="workflow" placeholder="name: CI
+on:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps: ..." required></textarea>
+          <div style="margin-top:12px"><button type="submit">Run Cost Gate</button></div>
+        </form>
+      </div>
+
       <div class="footer">No data is stored server-side. Token is only used for GitHub API calls during the request.</div>
     </div>
   </body></html>`;
@@ -260,6 +277,23 @@ function renderReport({ findings, markdown }) {
         <div class="footer">SlopSieve is intentionally conservative: it flags review risk, not correctness.</div>
       </div>
     </div></body></html>`;
+}
+
+
+function renderCostGateReport(result) {
+  const rows = (result.findings || []).map((f) => `<li style="margin:10px 0"><b>${htmlEscape(f.type)}</b> · ~${f.wasteMinutesMonthly} min/mo<br><span class="muted small">${htmlEscape(f.evidence)}</span><br><span class="small">${htmlEscape(f.recommendation)}</span></li>`).join('');
+  return `<!doctype html><html><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>SlopSieve Cost Gate</title>${baseStyles()}</head>
+    <body><div class="wrap"><div class="card">
+      <div class="row" style="align-items:center"><div><h1 style="margin:0">Cost Gate</h1><div class="muted small">Estimated monthly waste: <b>${result.estimatedMonthlyWaste} runner-minutes</b></div></div><div style="text-align:right"><a href="/" class="pill">← Back</a></div></div>
+      <div class="hr"></div>
+      <h3 style="margin:0 0 8px">Savings recommendations</h3>
+      <pre>${htmlEscape((result.recommendations || []).join('\n'))}</pre>
+      <h3 style="margin:12px 0 8px">Findings</h3>
+      <ul style="list-style:none;padding:0;margin:0">${rows || '<li class="muted">No obvious cost waste patterns found.</li>'}</ul>
+      <h3 style="margin:12px 0 8px">Optimized YAML diff</h3>
+      <pre>${htmlEscape(result.optimizedDiff || '')}</pre>
+    </div></div></body></html>`;
 }
 
 function deployGateAnalyze({ service, environment, policy = 'standard', plan }) {
@@ -406,6 +440,16 @@ const server = http.createServer(async (req, res) => {
       const result = deployGateAnalyze({ service, environment, policy, plan });
       if (url.pathname === '/api/deploy-gate') return json(res, 200, result);
       return page(res, 200, renderDeployGateReport(result));
+    }
+
+    if (req.method === 'POST' && (url.pathname === '/cost-gate' || url.pathname === '/api/cost-gate')) {
+      const raw = await readBody(req);
+      const params = new URLSearchParams(raw);
+      const workflow = (params.get('workflow') || '').trim();
+      if (!workflow) throw new Error('Workflow YAML/CI log is required');
+      const result = analyzeWorkflowCost(workflow);
+      if (url.pathname === '/api/cost-gate') return json(res, 200, result);
+      return page(res, 200, renderCostGateReport(result));
     }
 
     if (req.method === 'GET' && url.pathname === '/robots.txt') {

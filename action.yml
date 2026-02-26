@@ -1,5 +1,5 @@
 name: 'SlopSieve PR Review'
-description: 'AI-slop risk analysis for pull requests — flags hallucinated deps, missing tests, secrets, and oversized diffs'
+description: 'AI-slop risk analysis for pull requests + Cost Gate for changed workflow YAML files'
 author: 'alanw707'
 inputs:
   fail_on_high:

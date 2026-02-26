@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import { analyzePR } from './lib/analyze.js';
+import { analyzeWorkflowCost } from './lib/cost-gate.js';
 
 function env(name, fallback = '') {
   return process.env[name] ?? fallback;
@@ -31,7 +32,33 @@ async function ghRequest(url, token, options = {}) {
   return text ? JSON.parse(text) : null;
 }
 
-function formatComment(result) {
+async function listPrFiles(repo, prNumber, token) {
+  const out = [];
+  for (let page = 1; page <= 10; page++) {
+    const url = `https://api.github.com/repos/${repo}/pulls/${prNumber}/files?per_page=100&page=${page}`;
+    const chunk = await ghRequest(url, token);
+    if (!Array.isArray(chunk) || !chunk.length) break;
+    out.push(...chunk);
+    if (chunk.length < 100) break;
+  }
+  return out;
+}
+
+function formatCostSection(costReports) {
+  if (!costReports.length) return '';
+  const lines = [];
+  lines.push('');
+  lines.push('### 💸 Cost Gate');
+  for (const r of costReports) {
+    lines.push(`- **${r.file}**: ~${r.estimatedMonthlyWaste} runner-min/month waste`);
+    for (const f of (r.findings || []).slice(0, 4)) {
+      lines.push(`  - ${f.type}: ${f.recommendation}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+function formatComment(result, costSection = '') {
   const { findings, markdown } = result;
   const badge = findings.risk.label === 'HIGH'
     ? '🔴 HIGH'
@@ -54,6 +81,7 @@ function formatComment(result) {
     lines.push('');
   }
   lines.push(markdown);
+  if (costSection) lines.push(costSection);
   lines.push('');
   lines.push('Powered by [SlopSieve](https://github.com/alanw707/slopsieve)');
   return lines.join('\n');
@@ -75,7 +103,24 @@ async function main() {
   if (!prNumber) throw new Error('PR number not found in event payload');
 
   const result = await analyzePR({ repo, pr: prNumber, token });
-  const body = formatComment(result);
+
+  const prFiles = await listPrFiles(repo, prNumber, token);
+  const workflowFiles = prFiles.filter((f) => f.filename && /^\.github\/workflows\/.+\.ya?ml$/i.test(f.filename));
+  const costReports = [];
+  for (const wf of workflowFiles) {
+    try {
+      const yaml = wf.raw_url
+        ? await fetch(wf.raw_url, { headers: authHeaders(token) }).then(r => r.text())
+        : '';
+      if (!yaml) continue;
+      const cost = analyzeWorkflowCost(yaml);
+      costReports.push({ file: wf.filename, ...cost });
+    } catch (e) {
+      costReports.push({ file: wf.filename, estimatedMonthlyWaste: 0, findings: [{ type: 'analysis_error', recommendation: String(e.message || e) }] });
+    }
+  }
+
+  const body = formatComment(result, formatCostSection(costReports));
 
   const commentsUrl = `https://api.github.com/repos/${repo}/issues/${prNumber}/comments?per_page=100`;
   const comments = await ghRequest(commentsUrl, token);
