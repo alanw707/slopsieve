@@ -29,6 +29,28 @@ function readBody(req) {
   });
 }
 
+
+
+function parseRequestBody(req, raw) {
+  const contentType = String(req.headers['content-type'] || '').toLowerCase();
+
+  if (contentType.includes('application/json')) {
+    try {
+      return JSON.parse(raw || '{}');
+    } catch {
+      throw new Error('Invalid JSON body');
+    }
+  }
+
+  if (contentType.includes('application/x-www-form-urlencoded')) {
+    const params = new URLSearchParams(raw);
+    return Object.fromEntries(params.entries());
+  }
+
+  // Plain text fallback for fast API usage from scripts/CLI.
+  return { workflow: String(raw || '') };
+}
+
 function json(res, status, obj) {
   const body = JSON.stringify(obj, null, 2);
   res.writeHead(status, {
@@ -405,10 +427,10 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && (url.pathname === '/analyze' || url.pathname === '/api/analyze')) {
       const raw = await readBody(req);
-      const params = new URLSearchParams(raw);
-      const repo = (params.get('repo') || '').trim();
-      const pr = (params.get('pr') || '').trim();
-      const token = (params.get('token') || '').trim();
+      const body = parseRequestBody(req, raw);
+      const repo = String(body.repo || '').trim();
+      const pr = String(body.pr || '').trim();
+      const token = String(body.token || '').trim();
 
       const result = await analyzePR({ repo, pr, token });
 
@@ -418,9 +440,9 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && (url.pathname === '/list' || url.pathname === '/api/list')) {
       const raw = await readBody(req);
-      const params = new URLSearchParams(raw);
-      const repo = (params.get('repo') || '').trim();
-      const token = (params.get('token') || '').trim();
+      const body = parseRequestBody(req, raw);
+      const repo = String(body.repo || '').trim();
+      const token = String(body.token || '').trim();
       const [owner, name] = repo.split('/');
       if (!owner || !name) throw new Error('Repo must look like owner/name');
       const prs = await ghFetch(`https://api.github.com/repos/${owner}/${name}/pulls?state=open&per_page=30`, token);
@@ -430,11 +452,11 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && (url.pathname === '/deploy-gate' || url.pathname === '/api/deploy-gate')) {
       const raw = await readBody(req);
-      const params = new URLSearchParams(raw);
-      const service = (params.get('service') || '').trim();
-      const environment = (params.get('environment') || 'production').trim();
-      const policy = (params.get('policy') || 'standard').trim().toLowerCase();
-      const plan = (params.get('plan') || '').trim();
+      const body = parseRequestBody(req, raw);
+      const service = String(body.service || '').trim();
+      const environment = String(body.environment || 'production').trim();
+      const policy = String(body.policy || 'standard').trim().toLowerCase();
+      const plan = String(body.plan || '').trim();
       if (!service) throw new Error('Service is required');
       if (!plan) throw new Error('Deployment plan is required');
       const result = deployGateAnalyze({ service, environment, policy, plan });
@@ -444,8 +466,8 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && (url.pathname === '/cost-gate' || url.pathname === '/api/cost-gate')) {
       const raw = await readBody(req);
-      const params = new URLSearchParams(raw);
-      const workflow = (params.get('workflow') || '').trim();
+      const body = parseRequestBody(req, raw);
+      const workflow = String(body.workflow || body.yaml || body.ciLog || body.content || '').trim();
       if (!workflow) throw new Error('Workflow YAML/CI log is required');
       const result = analyzeWorkflowCost(workflow);
       if (url.pathname === '/api/cost-gate') return json(res, 200, result);
